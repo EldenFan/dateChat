@@ -1,0 +1,142 @@
+import logging
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import (
+    Message, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+import asyncio
+from config import API_TOKEN
+from state import ProfileStates
+import bd
+
+logging.basicConfig(level=logging.INFO)
+
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(storage=MemoryStorage()) 
+
+
+start_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Создать анкету")],
+        [KeyboardButton(text="Моя анкета")],
+        [KeyboardButton(text="Посмотреть анкеты")]
+    ],
+    resize_keyboard=True
+)
+
+@dp.message(Command("start"))
+@dp.message(F.text == "Начать")
+async def send_welcome(message: Message):
+    await message.answer("Привет! Я бот для знакомств. Выберите действие на клавиатуре ниже:", reply_markup=start_kb)
+
+
+@dp.message(Command("create_profile"))
+@dp.message(F.text == "Создать анкету")
+async def start_creating_profile(message: Message, state: FSMContext):
+    await message.answer("Как вас зовут?", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(ProfileStates.waiting_for_name)
+
+@dp.message(ProfileStates.waiting_for_name)
+async def process_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text.strip())
+    await message.answer("Укажите ваш пол:", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text = "Мужчина"), KeyboardButton(text = "Женщина")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_gender)
+
+@dp.message(ProfileStates.waiting_for_gender)
+async def process_gender(message: Message, state: FSMContext):
+    await state.update_data(gender=message.text)
+    await message.answer("Кого вы ищете?", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text = "Мужчина"), KeyboardButton(text = "Женщина")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_search_gender)
+
+@dp.message(ProfileStates.waiting_for_search_gender)
+async def process_search_gender(message: Message, state: FSMContext):
+    await state.update_data(search_gender=message.text)
+    await message.answer("Какая у вас цель общения?", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text = "Знакомство"), KeyboardButton(text = "Отношения")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_goal)
+
+@dp.message(ProfileStates.waiting_for_goal)
+async def process_goal(message: Message, state: FSMContext):
+    await state.update_data(goal=message.text)
+    await message.answer("Опишите ваши предпочтения:", reply_markup=None)
+    await state.set_state(ProfileStates.waiting_for_preferences)
+
+@dp.message(ProfileStates.waiting_for_preferences)
+async def process_preferences(message: Message, state: FSMContext):
+    await state.update_data(preferences=message.text)
+    await message.answer("Расскажите немного о себе:")
+    await state.set_state(ProfileStates.waiting_for_description)
+
+@dp.message(ProfileStates.waiting_for_description)
+async def process_description(message: Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await message.answer("Отправьте фото или нажмите 'Пропустить'.", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text = "Пропустить")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_photo)
+
+@dp.message(ProfileStates.waiting_for_photo, F.content_type == "photo")
+async def process_photo(message: Message, state: FSMContext):
+    await state.update_data(image=message.photo[-1].file_id)
+    await message.answer("Отправьте вашу локацию или нажмите 'Пропустить'.", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Отправить локацию", request_location=True)],
+        [KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_location)
+
+@dp.message(ProfileStates.waiting_for_photo)
+async def skip_photo(message: Message, state: FSMContext):
+    await state.update_data(image=None)
+    await message.answer("Отправьте вашу локацию или нажмите 'Пропустить'.", reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Отправить локацию", request_location=True)],
+        [KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+    await state.set_state(ProfileStates.waiting_for_location)
+
+@dp.message(ProfileStates.waiting_for_location, F.content_type == "location")
+async def process_location(message: Message, state: FSMContext):
+    user_data = await state.get_data()
+    location = f"{message.location.latitude}, {message.location.longitude}"
+    await bd.create_user(message.chat.id, user_data["name"], user_data['gender'], user_data['search_gender'],
+                    user_data['goal'], user_data['preferences'], user_data['description'], user_data['image'], location)
+    await message.answer("Ваша анкета сохранена!", reply_markup=start_kb)
+    await state.clear()
+
+@dp.message(ProfileStates.waiting_for_location)
+async def skip_location(message: Message, state: FSMContext):
+    user_data = await state.get_data()
+    location = None
+    await bd.create_user(message.chat.id, user_data["name"], user_data['gender'], user_data['search_gender'],
+                    user_data['goal'], user_data['preferences'], user_data['description'], user_data['image'], location)
+    await message.answer("Ваша анкета сохранена!", reply_markup=start_kb)
+    await state.clear()
+
+@dp.message(Command("my_profile"))
+@dp.message(F.text == "Моя анкета")
+async def my_profile(message: Message):
+    profile_data = await bd.get_user(message.chat.id)
+    if profile_data["image"]:
+        await message.answer_photo(
+            photo=profile_data["image"],
+            caption=f"{profile_data['name']}\n"
+                    f"Цель: {profile_data['goal']}\n"
+                    f"Предпочтения: {profile_data['preferences']}\n"
+                    f"{profile_data['description']}"
+        )
+    else:
+        await message.answer(
+            text=f"{profile_data['name']}\n"
+                 f"Цель: {profile_data['goal']}\n"
+                 f"Предпочтения: {profile_data['preferences']}\n"
+                 f"{profile_data['description']}"
+        )
+
+async def main():
+    await bd.start_bd()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
