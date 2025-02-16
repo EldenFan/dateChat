@@ -8,6 +8,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
+import random
 from config import API_TOKEN
 from state import ProfileStates
 import bd
@@ -133,6 +134,38 @@ async def my_profile(message: Message):
                  f"Предпочтения: {profile_data['preferences']}\n"
                  f"{profile_data['description']}"
         )
+
+@dp.message(Command("find"))
+@dp.message(F.text == "Посмотреть анкеты")
+async def find_profile(message: Message):
+    profiles = await bd.matching_profiles(message.chat.id)
+    if len(profiles) == 0:
+        if await bd.get_user(message.chat.id) is None:
+            await message.answer("Вы не создали анкету")
+        else:
+            await message.answer("Не найдено подхадящих а")
+    print(profiles)
+    profile_data = random.choice(profiles)
+    distance = "Расстояние не известно" if profile_data["distance"] is None else profile_data["distance"]
+    if profile_data["image"]:
+        await message.answer_photo(
+            photo=profile_data["image"],
+            caption=f"{profile_data['name']}, {distance}\n"
+                    f"Цель: {profile_data['goal']}\n"
+                    f"Предпочтения: {profile_data['preferences']}\n"
+                    f"{profile_data['description']}"
+        )
+    else:
+        await message.answer(
+            text=f"{profile_data['name']}, {distance}\n"
+                 f"Цель: {profile_data['goal']}\n"
+                 f"Предпочтения: {profile_data['preferences']}\n"
+                 f"{profile_data['description']}"
+        )
+
+    
+
+
 
 async def main():
     await bd.start_bd()
