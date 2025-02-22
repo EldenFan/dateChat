@@ -1,5 +1,5 @@
 import aiosqlite
-import math
+import distance
 
 async def start_bd(): 
     conn = await aiosqlite.connect('database.db')
@@ -12,7 +12,6 @@ async def start_bd():
                 gender TEXT,
                 search_gender TEXT,
                 goal TEXT,
-                preferences TEXT,
                 description TEXT,
                 image TEXT,
                 location TEXT
@@ -20,9 +19,32 @@ async def start_bd():
             
             await cursor.execute('''CREATE TABLE IF NOT EXISTS likes (
                 user_id INTEGER,
-                profile_id INTEGER,
-                action TEXT, -- 'like' или 'dislike'
-                PRIMARY KEY (user_id, profile_id)
+                other_id INTEGER,
+                action TEXT CHECK(action IN ('like', 'dislike')),
+                PRIMARY KEY (user_id, other_id),
+                FOREIGN KEY (user_id) REFERENCES profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (other_id) REFERENCES profiles(user_id) ON DELETE CASCADE
+            )''')
+
+            await cursor.execute('''CREATE TABLE IF NOT EXISTS traits(
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL
+            )''')
+            
+            await cursor.execute('''CREATE TABLE IF NOT EXISTS preferences(
+                user_id INTEGER,
+                trait_id INTEGER,
+                PRIMARY KEY (user_id, trait_id),
+                FOREIGN KEY (user_id) REFERENCES profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (trait_id) REFERENCES preference_table(id) ON DELETE CASCADE
+            )''')
+            
+            await cursor.execute('''CREATE TABLE IF NOT EXISTS selfcharacters(
+                user_id INTEGER,
+                trait_id INTEGER,
+                PRIMARY KEY (user_id, trait_id),
+                FOREIGN KEY (user_id) REFERENCES profiles(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (trait_id) REFERENCES preference_table(id) ON DELETE CASCADE
             )''')
         
         await conn.commit()
@@ -37,7 +59,6 @@ async def create_user(user_id, name, gender, search_gender, goal, preferences, d
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                              (user_id, name, gender, search_gender, goal, preferences, description, image, location))
         await conn.commit()
-
 
 async def get_user(user_id):
     conn = await aiosqlite.connect('database.db')
@@ -73,7 +94,6 @@ async def matching_profiles(user_id):
                                     (current_user["search_gender"], current_user["goal"], user_id))
                 rows = await cursor.fetchall()
         profiles = []
-        print(current_user["location"])
         if current_user["location"] is None:
             for row in rows:
                 profiles.append(
@@ -89,7 +109,7 @@ async def matching_profiles(user_id):
                     }
                 )
         else:
-            current_location = parse_location(current_user["location"])
+            current_location = distance.parse_location(current_user["location"])
             for row in rows:
                 if row[7] is None:
                     profiles.append(
@@ -105,8 +125,8 @@ async def matching_profiles(user_id):
                     }
                     )
                 else:
-                    profile_location = parse_location(row[7])
-                    distance = calculate_distance(current_location, profile_location)
+                    profile_location = distance.parse_location(row[7])
+                    distance = distance.calculate_distance(current_location, profile_location)
                     if distance <= 10:
                         profiles.append(
                             {
@@ -122,22 +142,9 @@ async def matching_profiles(user_id):
                         )
         return profiles  
 
-
-
-def parse_location(location):
-    latitude, longitude = map(float, location.split(","))
-    return latitude, longitude
-
-def calculate_distance(loc1, loc2):
-    lat1, lon1 = math.radians(loc1[0]), math.radians(loc1[1])
-    lat2, lon2 = math.radians(loc2[0]), math.radians(loc2[1])
-
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    R = 6371.0
-    distance = R * c
-    return distance
+async def add_trait(name):
+    conn = await aiosqlite.connect('database.db')
+    async with conn.cursor() as cursor:
+        await cursor.execute('''INSERT INTO traits (name) VALUES (?)''', (name, ))
+        await conn.commit()
+    

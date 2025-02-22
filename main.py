@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 import random
-from config import API_TOKEN
+from config import API_TOKEN, ADMINS
 from state import ProfileStates
 import bd
 
@@ -163,8 +163,19 @@ async def find_profile(message: Message):
                  f"{profile_data['description']}"
         )
 
-    
+@dp.message(Command("add_trait"), F.from_user.id.in_(ADMINS))
+async def start_adding(message: Message, state: FSMContext):
+    await message.answer("Вы можете вводить черты, когда закончите введите /stop")
+    await state.set_state(ProfileStates.adding_traits)
 
+@dp.message(ProfileStates.adding_traits, Command("stop"))
+async def stop_adding(message: Message, state: FSMContext):
+    await message.answer("Вы закончили добавлять черты")
+    await state.clear()
+
+@dp.message(ProfileStates.adding_traits)
+async def add_more_trait(message: Message):
+    await bd.add_trait(message.text)
 
 
 async def main():
