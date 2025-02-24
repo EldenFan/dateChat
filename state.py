@@ -10,3 +10,4 @@ class ProfileStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_location = State()
     adding_traits = State()
+    waiting_for_selfcharacters = State()

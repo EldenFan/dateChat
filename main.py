@@ -2,7 +2,8 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    CallbackQuery
 )
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -12,6 +13,7 @@ import random
 from config import API_TOKEN, ADMINS
 from state import ProfileStates
 import bd
+from keyboardClass import Keyboard
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,10 +36,10 @@ start_kb = ReplyKeyboardMarkup(
 async def send_welcome(message: Message):
     await message.answer("Привет! Я бот для знакомств. Выберите действие на клавиатуре ниже:", reply_markup=start_kb)
 
-
 @dp.message(Command("create_profile"))
 @dp.message(F.text == "Создать анкету")
 async def start_creating_profile(message: Message, state: FSMContext):
+    await bd.delete_user(message.chat.id)
     await message.answer("Как вас зовут?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(ProfileStates.waiting_for_name)
 
@@ -65,13 +67,42 @@ async def process_search_gender(message: Message, state: FSMContext):
 @dp.message(ProfileStates.waiting_for_goal)
 async def process_goal(message: Message, state: FSMContext):
     await state.update_data(goal=message.text)
-    await message.answer("Опишите ваши предпочтения:", reply_markup=None)
+    await message.answer("Выберите ваши предпочтения (Когда закончите введите /stop):", reply_markup=trait_kb.get_page())
     await state.set_state(ProfileStates.waiting_for_preferences)
 
-@dp.message(ProfileStates.waiting_for_preferences)
+@dp.callback_query(ProfileStates.waiting_for_preferences, F.data.startswith("page_"))
+async def next_page(callback_query: CallbackQuery):
+    page_number = int(callback_query.data.split('_')[1])
+    trait_page = trait_kb.get_page(current_page=page_number)
+    await callback_query.message.edit_reply_markup(reply_markup=trait_page)
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("trait_"), ProfileStates.waiting_for_preferences)
+async def add_preferences(callback_query: CallbackQuery):
+    trait = callback_query.data.split('_')[1]
+    print(trait)
+    await bd.set_preference(callback_query.from_user.id, trait)
+
+@dp.message(ProfileStates.waiting_for_preferences, Command("stop"))
+async def stop_adding_preferences(message: Message, state: FSMContext):
+    await message.answer("Что из этого описывает вас (Когда закончите введите /stop) :", reply_markup=trait_kb.get_page())
+    await state.set_state(ProfileStates.waiting_for_selfcharacters)
+
+@dp.callback_query(ProfileStates.waiting_for_selfcharacters, F.data.startswith("page_"))
+async def next_page(callback_query: CallbackQuery):
+    page_number = int(callback_query.data.split('_')[1])
+    trait_page = trait_kb.get_page(current_page=page_number)
+    await callback_query.message.edit_reply_markup(reply_markup=trait_page)
+    await callback_query.answer()
+
+@dp.callback_query(ProfileStates.waiting_for_selfcharacters, F.data.startswith("trait_"))
+async def add_selfcharacters(callback_query: CallbackQuery):
+    trait = callback_query.data.split('_')[1]
+    await bd.set_selfcharacters(callback_query.from_user.id, trait)   
+
+@dp.message(ProfileStates.waiting_for_selfcharacters, Command("stop"))
 async def process_preferences(message: Message, state: FSMContext):
-    await state.update_data(preferences=message.text)
-    await message.answer("Расскажите немного о себе:")
+    await message.answer("Расскажите немного о себе:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(ProfileStates.waiting_for_description)
 
 @dp.message(ProfileStates.waiting_for_description)
@@ -102,7 +133,7 @@ async def process_location(message: Message, state: FSMContext):
     user_data = await state.get_data()
     location = f"{message.location.latitude}, {message.location.longitude}"
     await bd.create_user(message.chat.id, user_data["name"], user_data['gender'], user_data['search_gender'],
-                    user_data['goal'], user_data['preferences'], user_data['description'], user_data['image'], location)
+                    user_data['goal'], user_data['description'], user_data['image'], location)
     await message.answer("Ваша анкета сохранена!", reply_markup=start_kb)
     await state.clear()
 
@@ -111,7 +142,7 @@ async def skip_location(message: Message, state: FSMContext):
     user_data = await state.get_data()
     location = None
     await bd.create_user(message.chat.id, user_data["name"], user_data['gender'], user_data['search_gender'],
-                    user_data['goal'], user_data['preferences'], user_data['description'], user_data['image'], location)
+                    user_data['goal'], user_data['description'], user_data['image'], location)
     await message.answer("Ваша анкета сохранена!", reply_markup=start_kb)
     await state.clear()
 
@@ -124,7 +155,8 @@ async def my_profile(message: Message):
             photo=profile_data["image"],
             caption=f"{profile_data['name']}\n"
                     f"Цель: {profile_data['goal']}\n"
-                    f"Предпочтения: {profile_data['preferences']}\n"
+                    f"Список предпочтений: {profile_data['preferences']}\n"
+                    f"Свои черты: {profile_data['selfcharacters']}\n"
                     f"{profile_data['description']}"
         )
     else:
@@ -132,6 +164,7 @@ async def my_profile(message: Message):
             text=f"{profile_data['name']}\n"
                  f"Цель: {profile_data['goal']}\n"
                  f"Предпочтения: {profile_data['preferences']}\n"
+                 f"Свои черты: {profile_data['selfcharacters']}\n"
                  f"{profile_data['description']}"
         )
 
@@ -176,10 +209,14 @@ async def stop_adding(message: Message, state: FSMContext):
 @dp.message(ProfileStates.adding_traits)
 async def add_more_trait(message: Message):
     await bd.add_trait(message.text)
+    global trait_kb
+    trait_kb = Keyboard(await bd.get_traits())
 
 
 async def main():
+    global trait_kb 
     await bd.start_bd()
+    trait_kb = Keyboard(await bd.get_traits())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
